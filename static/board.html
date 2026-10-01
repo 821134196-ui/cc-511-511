@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>交接看板 · 病区陪护通行码</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="topbar" id="topbar"></div>
+<div class="wrap">
+  <div id="wards"></div>
+  <h2 class="section">授权链 · 最近事件</h2>
+  <div class="card"><ul class="timeline" id="events"></ul></div>
+  <div style="font-size:12.5px;color:var(--gray);margin-top:10px">每 15 秒自动刷新</div>
+</div>
+
+<script src="/static/common.js"></script>
+<script>
+const TYPE_CLS = {
+  "申请": "teal", "审批发证": "ok", "审批拒绝": "bad", "撤销": "bad",
+  "入区": "ok", "离区": "mute", "转科": "warn", "评估恢复": "ok",
+  "评估注销": "bad", "出院": "warn", "封控": "bad", "解封": "teal", "更换陪护": "warn",
+};
+
+async function load() {
+  await renderNav("/board");
+  await refresh();
+  setInterval(refresh, 15000);
+}
+
+async function refresh() {
+  try {
+    const b = await api("/api/board");
+    renderWards(b.wards);
+    renderEvents(b.events);
+  } catch (e) { toast(e.message, "err"); }
+}
+
+function renderWards(wards) {
+  document.getElementById("wards").innerHTML = wards.map(w => `
+    ${w.locked_down ? '<div class="banner red">封控中：' + esc(w.ward_name) + ' 暂停一切陪护通行</div>' : ""}
+    <h2 class="section">${esc(w.ward_name)}</h2>
+    <div class="stat-row">
+      <div class="stat"><div class="n">${w.inside.length}</div><div class="k">当前在区陪护</div></div>
+      <div class="stat ${w.pending ? "warn" : ""}"><div class="n">${w.pending}</div><div class="k">待审批</div></div>
+      <div class="stat ${w.suspended ? "warn" : ""}"><div class="n">${w.suspended}</div><div class="k">转科待评估</div></div>
+      <div class="stat ${w.revoked_today ? "alert" : ""}"><div class="n">${w.revoked_today}</div><div class="k">今日撤销</div></div>
+    </div>
+    ${w.inside.length ? `<table class="list"><thead><tr>
+        <th>床位</th><th>患者代号</th><th>陪护代号</th><th>关系</th><th>通行码</th><th>入区时间</th>
+      </tr></thead><tbody>${w.inside.map(i => `<tr>
+        <td><b>${esc(i.bed_no)}</b></td><td>${esc(i.patient_code)}</td>
+        <td><b>${esc(i.escort_code)}</b></td><td>${esc(i.relationship)}</td>
+        <td class="mono">${esc(i.code)}</td>
+        <td class="mono" style="font-size:12.5px">${esc(i.last_in || "—")}</td>
+      </tr>`).join("")}</tbody></table>`
+      : '<div class="empty">当前无在区陪护</div>'}
+  `).join("");
+}
+
+function renderEvents(events) {
+  const box = document.getElementById("events");
+  if (!events.length) { box.innerHTML = '<li class="empty">暂无事件</li>'; return; }
+  box.innerHTML = events.map(e => `
+    <li>
+      <span class="t">${esc(e.created_at)}</span>
+      <span class="chip ${TYPE_CLS[e.type] || "mute"} type">${esc(e.type)}</span>
+      <span><b>${esc(e.actor)}</b>　${esc(e.detail)}
+        ${e.ward_name ? `<span style="color:var(--gray);font-size:12.5px">（${esc(e.ward_name)}）</span>` : ""}</span>
+    </li>`).join("");
+}
+
+load().catch(e => toast(e.message, "err"));
+</script>
+</body>
+</html>

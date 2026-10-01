@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>护士站 · 病区陪护通行码</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="topbar" id="topbar"></div>
+<div class="wrap">
+  <div id="lockBanner"></div>
+  <h2 class="section">床位一览（按床位组织）</h2>
+  <div class="grid beds" id="beds"><div class="empty">加载中……</div></div>
+
+  <h2 class="section">本病区陪护申请</h2>
+  <div id="apps"></div>
+</div>
+
+<!-- 申请/更换陪护弹窗 -->
+<dialog id="applyDlg">
+  <h3 id="applyTitle">登记陪护申请</h3>
+  <div id="applyPatient" style="font-size:14px;color:var(--gray)"></div>
+  <label>陪护人姓名（虚构）</label>
+  <input type="text" id="fName" placeholder="如：张桂芳">
+  <label>与患者关系</label>
+  <select id="fRel">
+    <option>配偶</option><option>子女</option><option>父母</option>
+    <option>兄弟姐妹</option><option>其他亲属</option><option>护工</option><option>其他</option>
+  </select>
+  <label>身份证明号码（虚构，本地仅保存遮罩样图）</label>
+  <input type="text" id="fId" placeholder="18 位虚构证件号" maxlength="18">
+  <label>可通行时段（限制时段 21:00-07:00 每患者限 1 名陪护）</label>
+  <div class="checks">
+    <label><input type="checkbox" value="08:00-12:00"> 上午 08:00-12:00</label>
+    <label><input type="checkbox" value="14:00-18:00"> 下午 14:00-18:00</label>
+    <label><input type="checkbox" value="18:00-21:00"> 晚间 18:00-21:00</label>
+    <label><input type="checkbox" value="21:00-07:00"> 夜间 21:00-07:00（受限）</label>
+  </div>
+  <label>申请理由</label>
+  <input type="text" id="fReason" placeholder="如：术后生活照护">
+  <div class="actions">
+    <button onclick="applyDlg.close()">取消</button>
+    <button class="primary" id="applySubmit">提交申请</button>
+  </div>
+</dialog>
+
+<!-- 转科弹窗 -->
+<dialog id="transferDlg">
+  <h3>患者转科</h3>
+  <div id="transferPatient" style="font-size:14px;color:var(--gray)"></div>
+  <p style="font-size:13px;color:var(--amber);margin-top:8px">
+    转科后，该患者全部有效通行码将立即冻结，需转入病区护士长重新评估。</p>
+  <label>转入病区</label>
+  <select id="fWard"></select>
+  <label>新床号</label>
+  <input type="text" id="fBed" placeholder="如：03">
+  <div class="actions">
+    <button onclick="transferDlg.close()">取消</button>
+    <button class="primary" id="transferSubmit">确认转科</button>
+  </div>
+</dialog>
+
+<script src="/static/common.js"></script>
+<script>
+let ME, META, OVERVIEW;
+const applyDlg = document.getElementById("applyDlg");
+const transferDlg = document.getElementById("transferDlg");
+let applyCtx = {};
+let transferCtx = {};
+
+async function load() {
+  ME = await renderNav("/nurse");
+  [META, OVERVIEW] = await Promise.all([api("/api/meta"), api("/api/ward/overview")]);
+  renderLockBanner();
+  renderBeds();
+  renderApps();
+}
+
+function renderLockBanner() {
+  document.getElementById("lockBanner").innerHTML = OVERVIEW.ward.locked_down
+    ? `<div class="banner red">本病区当前处于封控状态：全部通行权限已即时撤销，暂停审批发证。</div>` : "";
+}
+
+function passRow(ps) {
+  const actions = ps.status !== "revoked" ? `
+    <button class="small danger" onclick="revoke(${ps.id},'手机丢失，通行码可能外泄，即时作废')">手机丢失</button>
+    <button class="small danger" onclick="revoke(${ps.id},'通行码泄露，即时作废')">码泄露</button>
+    <button class="small" onclick="revoke(${ps.id},'主动注销')">注销</button>`
+    : `<span style="font-size:12px;color:var(--red)">${esc(ps.revoke_reason || "")}</span>`;
+  return `
+    <div style="display:flex;align-items:center;gap:8px;margin-top:6px;flex-wrap:wrap">
+      <span class="mono" style="font-size:13px">${esc(ps.code)}</span>
+      ${passChip(ps)}
+      <span style="font-size:12.5px;color:var(--gray)">${ps.windows.join("、")}</span>
+      ${actions}
+    </div>`;
+}
+
+function escortBlock(p, e) {
+  const inactive = e.active ? "" : `<span class="chip mute">已更换</span>`;
+  const img = e.id_image
+    ? `<a href="/id_images/${esc(e.id_image.split("/").pop())}" target="_blank" style="font-size:12.5px">证件样图</a>` : "";
+  return `
+    <div style="border-top:1px dashed var(--line);padding-top:8px;margin-top:8px">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <b>${esc(e.code_name)}</b>
+        <span class="chip teal">${esc(e.relationship)}</span>
+        ${inactive}
+        <span style="font-size:13px">姓名：${maskedField(e.name_masked, e.name)}</span>
+        <span style="font-size:13px">证件：<span class="masked">${esc(e.id_masked)}</span></span>
+        ${img}
+      </div>
+      ${e.passes.map(passRow).join("") || '<div style="font-size:12.5px;color:var(--gray);margin-top:4px">尚未发证</div>'}
+    </div>`;
+}
+
+function renderBeds() {
+  const box = document.getElementById("beds");
+  box.innerHTML = OVERVIEW.beds.map(p => {
+    const discharged = p.status === "discharged";
+    const activeEscorts = p.escorts.filter(e => e.active);
+    const actions = discharged ? "" : `
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button class="small primary" onclick="openApply(${p.id},'${esc(p.bed_no)}','${esc(p.name)}')">申请陪护</button>
+        ${activeEscorts.length ? `<button class="small" onclick="openReplace(${p.id},'${esc(p.bed_no)}','${esc(p.name)}')">更换陪护</button>` : ""}
+        <button class="small" onclick="openTransfer(${p.id},'${esc(p.bed_no)}','${esc(p.name)}')">转科</button>
+        <button class="small danger" onclick="discharge(${p.id},'${esc(p.bed_no)}')">出院</button>
+      </div>`;
+    return `
+      <div class="card">
+        <div style="display:flex;align-items:baseline;gap:10px">
+          <span style="font-size:22px;font-weight:800;color:var(--teal-dark)">${esc(p.bed_no)} 床</span>
+          <span style="font-size:16px;font-weight:600">${esc(p.name)}</span>
+          <span class="chip mute">${esc(p.code_name)}</span>
+          ${discharged ? '<span class="chip bad">已出院</span>' : ""}
+        </div>
+        ${p.escorts.map(e => escortBlock(p, e)).join("") ||
+          '<div style="font-size:13px;color:var(--gray);margin-top:8px">暂无登记陪护</div>'}
+        ${actions}
+      </div>`;
+  }).join("");
+}
+
+async function renderApps() {
+  const apps = await api("/api/applications");
+  const box = document.getElementById("apps");
+  if (!apps.length) { box.innerHTML = '<div class="empty">暂无申请记录</div>'; return; }
+  box.innerHTML = `<table class="list"><thead><tr>
+    <th>#</th><th>床位/患者</th><th>陪护人</th><th>关系</th><th>证件</th>
+    <th>时段</th><th>类型</th><th>理由</th><th>状态</th><th>审批备注</th></tr></thead>
+    <tbody>${apps.map(a => `<tr>
+      <td>${a.id}</td><td>${esc(a.bed_no)} 床 ${esc(a.patient_name)}</td>
+      <td>${maskedField(a.escort_name_masked, a.escort_name)}</td>
+      <td>${esc(a.relationship)}</td><td class="mono">${esc(a.id_masked)}</td>
+      <td style="font-size:12.5px">${a.windows.join("、")}</td>
+      <td>${a.kind === "replace" ? "更换陪护" : "新增"}</td>
+      <td>${esc(a.reason || "")}</td><td>${appChip(a.status)}</td>
+      <td style="font-size:12.5px">${esc(a.review_note || "")}</td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+/* ---------- 动作 ---------- */
+function openApply(patientId, bedNo, name, kind = "new", replacesEscortId = null) {
+  applyCtx = { patientId, kind, replacesEscortId };
+  document.getElementById("applyTitle").textContent =
+    kind === "replace" ? "更换陪护（旧陪护通行码将在批准后即时撤销）" : "登记陪护申请";
+  document.getElementById("applyPatient").textContent = `患者：${bedNo} 床 ${name}`;
+  document.getElementById("fName").value = "";
+  document.getElementById("fId").value = "";
+  document.getElementById("fReason").value = "";
+  applyDlg.querySelectorAll("input[type=checkbox]").forEach(c => (c.checked = false));
+  applyDlg.showModal();
+}
+
+function openReplace(patientId, bedNo, name) {
+  const p = OVERVIEW.beds.find(b => b.id === patientId);
+  const old = p.escorts.find(e => e.active);
+  if (!old) return toast("该患者没有可更换的陪护", "err");
+  if (!confirm(`将更换陪护：${old.code_name}（${old.name_masked}）的通行码在新陪护批准后即时撤销。继续？`)) return;
+  openApply(patientId, bedNo, name, "replace", old.id);
+}
+
+document.getElementById("applySubmit").onclick = async () => {
+  const windows = [...applyDlg.querySelectorAll("input[type=checkbox]:checked")].map(c => c.value);
+  const body = {
+    patient_id: applyCtx.patientId,
+    escort: {
+      name: document.getElementById("fName").value.trim(),
+      relationship: document.getElementById("fRel").value,
+      id_number: document.getElementById("fId").value.trim(),
+    },
+    windows,
+    reason: document.getElementById("fReason").value.trim(),
+    kind: applyCtx.kind,
+    replaces_escort_id: applyCtx.replacesEscortId,
+  };
+  try {
+    await api("/api/applications", { method: "POST", body });
+    applyDlg.close();
+    toast("申请已提交，等待护士长审批", "ok");
+    load();
+  } catch (e) { toast(e.message, "err"); }
+};
+
+function openTransfer(patientId, bedNo, name) {
+  transferCtx = { patientId };
+  document.getElementById("transferPatient").textContent = `患者：${bedNo} 床 ${name}`;
+  const sel = document.getElementById("fWard");
+  sel.innerHTML = META.wards.filter(w => w.id !== OVERVIEW.ward.id)
+    .map(w => `<option value="${w.id}">${esc(w.name)}</option>`).join("");
+  document.getElementById("fBed").value = "";
+  transferDlg.showModal();
+}
+
+document.getElementById("transferSubmit").onclick = async () => {
+  const bed = document.getElementById("fBed").value.trim();
+  if (!bed) return toast("请填写新床号", "err");
+  try {
+    const r = await api(`/api/patients/${transferCtx.patientId}/transfer`, {
+      method: "POST",
+      body: { to_ward_id: +document.getElementById("fWard").value, bed_no: bed },
+    });
+    transferDlg.close();
+    toast(`已转科，${r.suspended} 张通行码冻结待重新评估`, "ok");
+    load();
+  } catch (e) { toast(e.message, "err"); }
+};
+
+async function discharge(patientId, bedNo) {
+  if (!confirm(`确认 ${bedNo} 床患者出院？其全部通行权限将即时撤销。`)) return;
+  try {
+    const r = await api(`/api/patients/${patientId}/discharge`, { method: "POST" });
+    toast(`已办理出院，${r.revoked} 张通行码即时撤销`, "ok");
+    load();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function revoke(passId, reason) {
+  if (!confirm(`确认撤销该通行码？\n原因：${reason}`)) return;
+  try {
+    await api(`/api/passes/${passId}/revoke`, { method: "POST", body: { reason } });
+    toast("通行码已即时撤销", "ok");
+    load();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+load().catch(e => toast(e.message, "err"));
+</script>
+</body>
+</html>

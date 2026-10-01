@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>通行与撤销记录 · 病区陪护通行码</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="topbar" id="topbar"></div>
+<div class="wrap">
+  <h2 class="section">通行记录（含被拦截的扫描）</h2>
+  <div id="passages"><div class="empty">加载中……</div></div>
+
+  <h2 class="section" id="revTitle">撤销记录</h2>
+  <div id="revocations"></div>
+</div>
+
+<script src="/static/common.js"></script>
+<script>
+async function load() {
+  const me = await renderNav("/records");
+  const rows = await api("/api/passages");
+  document.getElementById("passages").innerHTML = rows.length ? `<table class="list">
+    <thead><tr><th>时间</th><th>闸机</th><th>通行码</th><th>陪护代号</th><th>病区</th>
+    <th>方向</th><th>结果</th><th>拒绝原因</th></tr></thead>
+    <tbody>${rows.map(r => `<tr>
+      <td class="mono" style="font-size:12.5px">${esc(r.scanned_at)}</td>
+      <td>${esc(r.gate_name)}</td>
+      <td class="mono">${esc(r.code)}</td>
+      <td>${esc(r.escort_code || "—")}</td>
+      <td>${esc(r.ward_name || "—")}</td>
+      <td>${r.direction === "in" ? "入区" : r.direction === "out" ? "离区" : "—"}</td>
+      <td>${r.result === "allowed" ? '<span class="chip ok">放行</span>' : '<span class="chip bad">拦截</span>'}</td>
+      <td style="font-size:13px">${esc(r.deny_reason || "")}</td>
+    </tr>`).join("")}</tbody></table>` : '<div class="empty">暂无通行记录</div>';
+
+  const revBox = document.getElementById("revocations");
+  if (me.role === "gate") {
+    document.getElementById("revTitle").style.display = "none";
+    revBox.innerHTML = "";
+    return;
+  }
+  const revs = await api("/api/revocations");
+  revBox.innerHTML = revs.length ? `<table class="list">
+    <thead><tr><th>撤销时间</th><th>通行码</th><th>陪护代号</th><th>陪护姓名</th>
+    <th>床位/患者</th><th>撤销原因</th></tr></thead>
+    <tbody>${revs.map(r => `<tr>
+      <td class="mono" style="font-size:12.5px">${esc(r.revoked_at || "")}</td>
+      <td class="mono">${esc(r.code)}</td>
+      <td><b>${esc(r.escort_code)}</b></td>
+      <td>${esc(r.escort_name_masked)}</td>
+      <td>${esc(r.bed_no)} 床 ${esc(r.patient_name)}</td>
+      <td style="font-size:13px">${esc(r.revoke_reason || "")}</td>
+    </tr>`).join("")}</tbody></table>` : '<div class="empty">暂无撤销记录</div>';
+}
+
+load().catch(e => toast(e.message, "err"));
+</script>
+</body>
+</html>

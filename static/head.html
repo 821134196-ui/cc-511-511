@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>审批发证 · 病区陪护通行码</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="topbar" id="topbar"></div>
+<div class="wrap">
+  <div id="lockBanner"></div>
+
+  <h2 class="section">待审批申请</h2>
+  <div class="grid cols2" id="pending"><div class="empty">加载中……</div></div>
+
+  <h2 class="section">转科冻结 · 待重新评估</h2>
+  <div id="suspended"><div class="empty">加载中……</div></div>
+
+  <h2 class="section">本病区通行码</h2>
+  <div id="passes"></div>
+
+  <h2 class="section">病区封控</h2>
+  <div class="card" id="lockCtl"></div>
+</div>
+
+<script src="/static/common.js"></script>
+<script>
+let ME, META, OVERVIEW;
+
+async function load() {
+  ME = await renderNav("/head");
+  [META, OVERVIEW] = await Promise.all([api("/api/meta"), api("/api/ward/overview")]);
+  renderLock();
+  renderPending();
+  renderSuspended();
+  renderPasses();
+}
+
+function renderLock() {
+  const locked = OVERVIEW.ward.locked_down;
+  document.getElementById("lockBanner").innerHTML = locked
+    ? `<div class="banner red">本病区封控中：全部通行权限已即时撤销，审批发证已暂停。</div>` : "";
+  document.getElementById("lockCtl").innerHTML = `
+    <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+      <span>当前状态：${locked ? '<span class="chip bad">封控中</span>' : '<span class="chip ok">正常</span>'}</span>
+      <button class="${locked ? "" : "danger"}" onclick="toggleLock(${locked ? 0 : 1})">
+        ${locked ? "解除封控" : "启动封控（即时撤销本病区全部通行码）"}</button>
+      <span style="font-size:13px;color:var(--gray)">解封后已撤销的通行码不自动恢复，需重新申请审批。</span>
+    </div>`;
+}
+
+async function toggleLock(on) {
+  const msg = on ? "确认启动封控？本病区全部有效/冻结通行码将即时撤销。"
+                 : "确认解除封控？已撤销的通行码不会自动恢复。";
+  if (!confirm(msg)) return;
+  try {
+    const r = await api("/api/ward/lockdown", { method: "POST", body: { on: !!on } });
+    toast(on ? `已封控，${r.revoked} 张通行码即时撤销` : "已解除封控", "ok");
+    load();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function renderPending() {
+  const apps = await api("/api/applications?status=pending");
+  const box = document.getElementById("pending");
+  if (!apps.length) { box.innerHTML = '<div class="empty">没有待审批的申请</div>'; return; }
+  box.innerHTML = apps.map(a => `
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:baseline">
+        <b>申请 #${a.id}${a.kind === "replace" ? ' <span class="chip warn">更换陪护</span>' : ""}</b>
+        <span style="font-size:12.5px;color:var(--gray)">${esc(a.created_at)} · ${esc(a.created_by)}</span>
+      </div>
+      <div style="margin-top:8px;font-size:14.5px">
+        ${esc(a.bed_no)} 床 ${esc(a.patient_name)} ·
+        陪护 <b>${esc(a.escort_code)}</b>（${maskedField(a.escort_name_masked, a.escort_name)}，${esc(a.relationship)}）
+      </div>
+      <div style="font-size:13px;color:var(--gray);margin-top:4px">
+        证件 <span class="mono">${esc(a.id_masked)}</span> · 时段 ${a.windows.join("、")}
+      </div>
+      <div style="font-size:13.5px;margin-top:4px">理由：${esc(a.reason || "—")}</div>
+      <div style="display:flex;gap:10px;margin-top:12px">
+        <button class="primary small" onclick="approve(${a.id})">批准并发证</button>
+        <button class="danger small" onclick="reject(${a.id})">拒绝</button>
+      </div>
+    </div>`).join("");
+}
+
+async function renderSuspended() {
+  const list = await api("/api/passes?status=suspended");
+  const box = document.getElementById("suspended");
+  if (!list.length) { box.innerHTML = '<div class="empty">没有待评估的转科授权</div>'; return; }
+  box.innerHTML = `<table class="list"><thead><tr>
+    <th>通行码</th><th>床位/患者</th><th>陪护代号</th><th>关系</th><th>时段</th><th>操作</th>
+    </tr></thead><tbody>${list.map(p => `<tr>
+      <td class="mono">${esc(p.code)}</td>
+      <td>${esc(p.bed_no)} 床 ${esc(p.patient_name)}</td>
+      <td><b>${esc(p.escort_code)}</b></td>
+      <td>${esc(p.relationship)}</td>
+      <td style="font-size:12.5px">${p.windows.join("、")}</td>
+      <td>
+        <button class="small primary" onclick="reeval(${p.id},'restore')">评估通过·恢复</button>
+        <button class="small danger" onclick="reeval(${p.id},'revoke')">评估不通过·注销</button>
+      </td></tr>`).join("")}</tbody></table>`;
+}
+
+async function renderPasses() {
+  const list = await api("/api/passes");
+  const box = document.getElementById("passes");
+  if (!list.length) { box.innerHTML = '<div class="empty">暂无通行码</div>'; return; }
+  box.innerHTML = `<table class="list"><thead><tr>
+    <th>通行码</th><th>床位/患者</th><th>陪护</th><th>时段</th><th>状态</th><th>发证时间</th><th>操作</th>
+    </tr></thead><tbody>${list.map(p => `<tr>
+      <td class="mono">${esc(p.code)}</td>
+      <td>${esc(p.bed_no)} 床 ${esc(p.patient_name)}</td>
+      <td><b>${esc(p.escort_code)}</b>（${esc(p.escort_name_masked)}）</td>
+      <td style="font-size:12.5px">${p.windows.join("、")}</td>
+      <td>${passChip(p)}${p.status === "revoked" ? `<div style="font-size:12px;color:var(--red)">${esc(p.revoke_reason || "")}</div>` : ""}</td>
+      <td style="font-size:12.5px">${esc(p.issued_at)}</td>
+      <td>${p.status !== "revoked" ? `<button class="small danger" onclick="revoke(${p.id})">撤销</button>` : ""}</td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+async function approve(id) {
+  const note = prompt("审批备注（可空）：", "");
+  if (note === null) return;
+  try {
+    const r = await api(`/api/applications/${id}/approve`, { method: "POST", body: { note } });
+    toast(`已发证：${r.code}`, "ok");
+    load();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function reject(id) {
+  const note = prompt("拒绝原因：", "不符合陪护条件");
+  if (!note) return;
+  try {
+    await api(`/api/applications/${id}/reject`, { method: "POST", body: { note } });
+    toast("已拒绝", "ok");
+    load();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function reeval(id, decision) {
+  const msg = decision === "restore" ? "确认评估通过并恢复该通行码？" : "确认评估不通过并注销该通行码？";
+  if (!confirm(msg)) return;
+  try {
+    await api(`/api/passes/${id}/reevaluate`, { method: "POST", body: { decision } });
+    toast("已完成重新评估", "ok");
+    load();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+async function revoke(id) {
+  const reason = prompt("撤销原因：", "主动注销");
+  if (!reason) return;
+  try {
+    await api(`/api/passes/${id}/revoke`, { method: "POST", body: { reason } });
+    toast("通行码已即时撤销", "ok");
+    load();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+load().catch(e => toast(e.message, "err"));
+</script>
+</body>
+</html>

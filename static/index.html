@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>登录 · 病区陪护通行码</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="login-wrap">
+  <h1>病区陪护通行码系统</h1>
+  <p class="sub">演示环境 · 请选择登录身份（数据均为虚构）</p>
+  <div class="user-cards" id="users"><div class="empty">加载中……</div></div>
+  <p class="sub" style="margin-top:26px;font-size:13px">
+    护士：登记陪护申请、转科、出院 · 护士长：审批发证、封控、转科再评估 · 门岗：仅核验通行码，不能审批
+  </p>
+</div>
+<script src="/static/common.js"></script>
+<script>
+const ROLE_LABEL = { nurse: "护士", head_nurse: "护士长", gate: "门岗" };
+(async () => {
+  const users = await api("/api/users");
+  const box = document.getElementById("users");
+  box.innerHTML = users.map(u => `
+    <button class="user-card" data-u="${esc(u.username)}">
+      <div class="name">${esc(u.display_name)}</div>
+      <div class="role">${ROLE_LABEL[u.role]}${u.ward_name ? " · " + esc(u.ward_name) : u.gate_name ? " · " + esc(u.gate_name) : ""}</div>
+    </button>`).join("");
+  box.querySelectorAll(".user-card").forEach(b => b.onclick = async () => {
+    try {
+      const r = await api("/api/login", { method: "POST", body: { username: b.dataset.u } });
+      location.href = r.home;
+    } catch (e) { toast(e.message, "err"); }
+  });
+})();
+</script>
+</body>
+</html>

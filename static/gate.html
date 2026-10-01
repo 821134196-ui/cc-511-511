@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>门岗核验 · 病区陪护通行码</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<div class="topbar" id="topbar"></div>
+<div class="gate-wrap">
+  <div class="card">
+    <div class="scan-panel">
+      <select id="gate">
+        <option>东门</option><option>西门</option><option>南门</option><option>大厅</option>
+      </select>
+      <select id="direction">
+        <option value="auto">自动判断方向</option>
+        <option value="in">入区闸机</option>
+        <option value="out">离区闸机</option>
+      </select>
+      <input id="code" placeholder="扫描或输入通行码" autocomplete="off" spellcheck="false">
+      <button class="primary" id="scanBtn">核验</button>
+    </div>
+    <div style="font-size:13px;color:var(--gray)">
+      门岗仅负责核验，不能审批人员。同一通行码在两个入口同时扫描，只放行一次。
+    </div>
+  </div>
+
+  <div class="verdict idle" id="verdict" style="margin-top:16px">
+    <div class="big">待核验</div>
+    <div class="reason" style="color:var(--gray);font-weight:400">请扫描陪护人通行码</div>
+  </div>
+
+  <h2 class="section">本岗最近核验</h2>
+  <div id="recent"></div>
+</div>
+
+<script src="/static/common.js"></script>
+<script>
+const codeInput = document.getElementById("code");
+const verdict = document.getElementById("verdict");
+let ME;
+
+async function load() {
+  ME = await renderNav("/gate");
+  if (ME.gate_name) document.getElementById("gate").value = ME.gate_name;
+  codeInput.focus();
+  renderRecent();
+}
+
+async function scan() {
+  const code = codeInput.value.trim();
+  if (!code) return;
+  codeInput.value = "";
+  codeInput.focus();
+  try {
+    const r = await api("/api/gate/scan", {
+      method: "POST",
+      body: {
+        code,
+        gate: document.getElementById("gate").value,
+        direction: document.getElementById("direction").value,
+      },
+    });
+    showVerdict(r);
+    renderRecent();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+function showVerdict(r) {
+  if (r.allowed) {
+    verdict.className = "verdict allow";
+    verdict.innerHTML = `
+      <div class="big">${r.direction === "in" ? "允许入区" : "允许离区"}</div>
+      <div class="meta">
+        <div class="item"><div class="k">陪护代号</div><div class="v">${esc(r.escort_code)}</div></div>
+        <div class="item"><div class="k">病区</div><div class="v">${esc(r.ward_name)}</div></div>
+        <div class="item"><div class="k">床位</div><div class="v">${esc(r.bed_no)}</div></div>
+      </div>
+      <div class="sensitive">
+        患者代号 ${esc(r.patient_code)} · 陪护姓名（遮罩）${esc(r.escort_name_masked)} ·
+        证件（遮罩）<span class="mono">${esc(r.id_masked)}</span> · 关系 ${esc(r.relationship)}<br>
+        可通行时段 ${esc(r.windows)} · ${esc(r.scanned_at)} · ${esc(r.gate)}
+      </div>`;
+  } else {
+    verdict.className = "verdict deny";
+    const meta = r.escort_code ? `
+      <div class="meta">
+        <div class="item"><div class="k">陪护代号</div><div class="v">${esc(r.escort_code)}</div></div>
+        <div class="item"><div class="k">病区</div><div class="v">${esc(r.ward_name)}</div></div>
+        <div class="item"><div class="k">床位</div><div class="v">${esc(r.bed_no)}</div></div>
+      </div>` : "";
+    verdict.innerHTML = `
+      <div class="big">禁止通行</div>
+      <div class="reason">${esc(r.deny_reason)}</div>
+      ${meta}
+      <div class="sensitive">通行码 <span class="mono">${esc(r.code)}</span> · ${esc(r.scanned_at)} · ${esc(r.gate)}</div>`;
+  }
+}
+
+async function renderRecent() {
+  const rows = await api("/api/gate/recent");
+  const box = document.getElementById("recent");
+  if (!rows.length) { box.innerHTML = '<div class="empty">暂无核验记录</div>'; return; }
+  box.innerHTML = `<table class="list"><thead><tr>
+    <th>时间</th><th>闸机</th><th>通行码</th><th>代号</th><th>方向</th><th>结果</th>
+    </tr></thead><tbody>${rows.map(r => `<tr>
+      <td class="mono" style="font-size:12.5px">${esc(r.scanned_at)}</td>
+      <td>${esc(r.gate)}</td>
+      <td class="mono">${esc(r.code)}</td>
+      <td>${esc(r.escort_code || "—")}</td>
+      <td>${r.direction === "in" ? "入区" : r.direction === "out" ? "离区" : "—"}</td>
+      <td>${r.result === "allowed"
+        ? '<span class="chip ok">放行</span>'
+        : `<span class="chip bad">拦截</span> <span style="font-size:12.5px">${esc(r.deny_reason || "")}</span>`}</td>
+    </tr>`).join("")}</tbody></table>`;
+}
+
+document.getElementById("scanBtn").onclick = scan;
+codeInput.addEventListener("keydown", e => { if (e.key === "Enter") scan(); });
+load().catch(e => toast(e.message, "err"));
+</script>
+</body>
+</html>
